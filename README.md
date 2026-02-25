@@ -21,11 +21,14 @@ Then open `.env` and fill:
 
 - `OPENAI_API_KEY` (optional but recommended)
 - `OPENAI_MODEL` (optional, default: `gpt-4o-mini`)
+- `SMTP_HOST` / `SMTP_PORT` / `SMTP_USERNAME` / `SMTP_PASSWORD` (for email sending)
+- `EMAIL_FROM` / `EMAIL_TO` (sender + recipients)
 
 Optional:
 
 - `WEB_FETCH_TIMEOUT_SECONDS`
 - `WEB_FETCH_USER_AGENT`
+- `SMTP_USE_SSL` / `SMTP_USE_STARTTLS` / `SMTP_TIMEOUT_SECONDS`
 
 ## 2) Configure sources
 
@@ -62,28 +65,36 @@ Useful flags:
 - `--dry-run`: generate report without updating state.
 - `--max-relevant 25`: cap number of items sent to summarizer.
 - `--sources-file path/to/sources.json`: alternate source file.
+- `--no-email`: skip email for this run even if SMTP is configured.
 
-## 4) Install daily cron
+## 4) Email delivery
+
+When SMTP + email env vars are configured, the script sends each generated digest as:
+
+- Plain-text email body containing the digest
+- Markdown attachment (`YYYY-MM-DD.md`)
+
+Multiple recipients are supported in `EMAIL_TO` using comma separation.
+
+## 5) Install daily cron
 
 Make scripts executable:
 
 ```bash
-chmod +x scripts/setup.sh cron/run_daily.sh
+chmod +x scripts/setup.sh scripts/install_cron.sh cron/run_daily.sh
 ```
 
-Add cron entry:
+Install cron entry automatically:
 
 ```bash
-crontab -e
+./scripts/install_cron.sh
 ```
 
-Use:
+Default schedule is daily at 7:00 AM local time. Override schedule with:
 
-```cron
-0 7 * * * cd /Users/danchizik/Desktop/feed_summary && /Users/danchizik/Desktop/feed_summary/cron/run_daily.sh
+```bash
+CRON_SCHEDULE="30 8 * * *" ./scripts/install_cron.sh
 ```
-
-This runs every day at 7:00 AM local machine time.
 
 ## Output
 

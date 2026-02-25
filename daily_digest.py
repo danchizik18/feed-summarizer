@@ -7,9 +7,12 @@ import json
 import math
 import os
 import re
+import smtplib
 import sqlite3
+import ssl
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from email.message import EmailMessage
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
@@ -140,6 +143,15 @@ class Settings:
     openai_model: str
     user_agent: str
     timeout_seconds: int
+    smtp_host: str | None
+    smtp_port: int
+    smtp_username: str | None
+    smtp_password: str | None
+    smtp_use_ssl: bool
+    smtp_use_starttls: bool
+    smtp_timeout_seconds: int
+    email_from: str | None
+    email_to: str | None
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -151,7 +163,34 @@ class Settings:
                 "feed-summarizer/1.0 (+https://github.com/danchizik18/feed-summarizer)",
             ),
             timeout_seconds=max(5, int(os.getenv("WEB_FETCH_TIMEOUT_SECONDS", "20"))),
+            smtp_host=empty_to_none(os.getenv("SMTP_HOST")),
+            smtp_port=max(1, int(os.getenv("SMTP_PORT", "587"))),
+            smtp_username=empty_to_none(os.getenv("SMTP_USERNAME")),
+            smtp_password=empty_to_none(os.getenv("SMTP_PASSWORD")),
+            smtp_use_ssl=parse_env_bool(os.getenv("SMTP_USE_SSL"), default=False),
+            smtp_use_starttls=parse_env_bool(os.getenv("SMTP_USE_STARTTLS"), default=True),
+            smtp_timeout_seconds=max(5, int(os.getenv("SMTP_TIMEOUT_SECONDS", "30"))),
+            email_from=empty_to_none(os.getenv("EMAIL_FROM")),
+            email_to=empty_to_none(os.getenv("EMAIL_TO")),
         )
+
+
+def empty_to_none(value: str | None) -> str | None:
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
+def parse_env_bool(value: str | None, default: bool) -> bool:
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return default
 
 
 @dataclass(frozen=True)
@@ -761,6 +800,79 @@ def write_report(report_dir: Path, report_text: str, run_at: datetime) -> Path:
     return path
 
 
+def parse_recipients(value: str | None) -> list[str]:
+    if not value:
+        return []
+    recipients: list[str] = []
+    for chunk in value.replace(";", ",").split(","):
+        candidate = chunk.strip()
+        if candidate:
+            recipients.append(candidate)
+    return recipients
+
+
+def email_config_present(settings: Settings) -> bool:
+    return bool(settings.smtp_host or settings.email_to or settings.email_from)
+
+
+def build_email_subject(run_at: datetime, selected_count: int) -> str:
+    date_text = run_at.strftime("%Y-%m-%d")
+    return f"Daily AI/SWE Digest - {date_text} ({selected_count} highlights)"
+
+
+def send_report_email(
+    settings: Settings,
+    report_text: str,
+    report_name: str,
+    subject: str,
+) -> list[str]:
+    recipients = parse_recipients(settings.email_to)
+    if not settings.smtp_host:
+        raise ValueError("SMTP_HOST is required for email delivery.")
+    if not settings.email_from:
+        raise ValueError("EMAIL_FROM is required for email delivery.")
+    if not recipients:
+        raise ValueError("EMAIL_TO is required for email delivery.")
+    if bool(settings.smtp_username) ^ bool(settings.smtp_password):
+        raise ValueError("Set both SMTP_USERNAME and SMTP_PASSWORD or neither.")
+
+    message = EmailMessage()
+    message["Subject"] = subject
+    message["From"] = settings.email_from
+    message["To"] = ", ".join(recipients)
+    message.set_content(report_text)
+    message.add_attachment(
+        report_text.encode("utf-8"),
+        maintype="text",
+        subtype="markdown",
+        filename=report_name,
+    )
+
+    if settings.smtp_use_ssl:
+        with smtplib.SMTP_SSL(
+            settings.smtp_host,
+            settings.smtp_port,
+            timeout=settings.smtp_timeout_seconds,
+        ) as smtp:
+            if settings.smtp_username and settings.smtp_password:
+                smtp.login(settings.smtp_username, settings.smtp_password)
+            smtp.send_message(message)
+    else:
+        with smtplib.SMTP(
+            settings.smtp_host,
+            settings.smtp_port,
+            timeout=settings.smtp_timeout_seconds,
+        ) as smtp:
+            smtp.ehlo()
+            if settings.smtp_use_starttls:
+                smtp.starttls(context=ssl.create_default_context())
+                smtp.ehlo()
+            if settings.smtp_username and settings.smtp_password:
+                smtp.login(settings.smtp_username, settings.smtp_password)
+            smtp.send_message(message)
+    return recipients
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Fetch web feeds (Medium/Reddit/etc.) and generate a daily AI/SWE digest."
@@ -801,6 +913,11 @@ def parse_args() -> argparse.Namespace:
         "--quiet",
         action="store_true",
         help="Suppress progress logs (only final result/errors).",
+    )
+    parser.add_argument(
+        "--no-email",
+        action="store_true",
+        help="Do not send email, even when SMTP settings are configured.",
     )
     return parser.parse_args()
 
@@ -877,7 +994,28 @@ def main() -> int:
     report_path = write_report(args.report_dir, report_text, run_at)
     logger(f"[info] Report generated at {report_path}")
 
-    if not args.dry_run:
+    if args.dry_run:
+        logger("[info] Dry run enabled; skipping email delivery and state updates.")
+    else:
+        if args.no_email:
+            logger("[info] Email delivery skipped by --no-email.")
+        elif email_config_present(settings):
+            subject = build_email_subject(run_at, len(selected))
+            try:
+                recipients = send_report_email(
+                    settings=settings,
+                    report_text=report_text,
+                    report_name=report_path.name,
+                    subject=subject,
+                )
+                logger(f"[info] Email delivered to {', '.join(recipients)}")
+            except Exception as exc:
+                print(f"[error] Email delivery failed: {exc}")
+                print(f"[error] Report is available locally at {report_path}")
+                return 1
+        else:
+            logger("[info] Email delivery skipped: SMTP settings not configured.")
+
         state.mark_seen([item.id for item in fetched_items], run_at)
         state.prune_seen(args.prune_days, run_at)
         state.set_value("last_run_utc", run_at.isoformat())
