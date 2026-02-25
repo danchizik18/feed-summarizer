@@ -5,7 +5,7 @@ This project scrapes general web feeds (RSS/Atom) every day, filters for AI and 
 ## What it does
 
 - Polls configured sources in `config/sources.json` (Medium, Reddit, Hacker News, etc).
-- Tracks seen article IDs in SQLite so each run focuses on newly discovered items.
+- Tracks seen article IDs and canonical links in SQLite so each run focuses on truly new items.
 - Scores entries for AI/SWE relevance.
 - Summarizes key developments with OpenAI (or a rule-based fallback if no OpenAI key is set).
 - Writes digest reports to `reports/YYYY-MM-DD.md`.
@@ -66,6 +66,7 @@ Useful flags:
 - `--max-relevant 25`: cap number of items sent to summarizer.
 - `--sources-file path/to/sources.json`: alternate source file.
 - `--no-email`: skip email for this run even if SMTP is configured.
+- `--email-empty-digest`: send email even if there are no new items (default is skip).
 
 ## 4) Email delivery
 

@@ -256,12 +256,34 @@ class StateStore:
                 );
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS seen_links (
+                    link TEXT PRIMARY KEY,
+                    first_seen_utc TEXT NOT NULL
+                );
+                """
+            )
 
     def is_seen(self, item_id: str) -> bool:
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT 1 FROM seen_items WHERE item_id = ? LIMIT 1",
                 (item_id,),
+            ).fetchone()
+        return row is not None
+
+    def is_seen_item(self, item: NewsItem) -> bool:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM seen_items WHERE item_id = ? LIMIT 1",
+                (item.id,),
+            ).fetchone()
+            if row is not None:
+                return True
+            row = conn.execute(
+                "SELECT 1 FROM seen_links WHERE link = ? LIMIT 1",
+                (item.link,),
             ).fetchone()
         return row is not None
 
@@ -278,11 +300,33 @@ class StateStore:
                 [(item_id, stamp) for item_id in item_ids],
             )
 
+    def mark_seen_links(self, links: list[str], seen_at: datetime) -> None:
+        clean_links = sorted({link.strip() for link in links if link and link.strip()})
+        if not clean_links:
+            return
+        stamp = seen_at.isoformat()
+        with self._connect() as conn:
+            conn.executemany(
+                """
+                INSERT OR IGNORE INTO seen_links(link, first_seen_utc)
+                VALUES (?, ?)
+                """,
+                [(link, stamp) for link in clean_links],
+            )
+
+    def mark_seen_items(self, items: list[NewsItem], seen_at: datetime) -> None:
+        self.mark_seen([item.id for item in items], seen_at)
+        self.mark_seen_links([item.link for item in items], seen_at)
+
     def prune_seen(self, keep_days: int, now: datetime) -> None:
         threshold = now - timedelta(days=max(1, keep_days))
         with self._connect() as conn:
             conn.execute(
                 "DELETE FROM seen_items WHERE first_seen_utc < ?",
+                (threshold.isoformat(),),
+            )
+            conn.execute(
+                "DELETE FROM seen_links WHERE first_seen_utc < ?",
                 (threshold.isoformat(),),
             )
 
@@ -335,7 +379,8 @@ class RssClient:
                 errors.append(f"{source.name}: {exc}")
         deduped: dict[str, NewsItem] = {}
         for item in results:
-            deduped[item.id] = item
+            dedupe_key = item.link or item.id
+            deduped[dedupe_key] = item
         items = list(deduped.values())
         items.sort(
             key=lambda item: (item.published_at or datetime(1970, 1, 1, tzinfo=timezone.utc)),
@@ -919,6 +964,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Do not send email, even when SMTP settings are configured.",
     )
+    parser.add_argument(
+        "--email-empty-digest",
+        action="store_true",
+        help="Send email even when no new items are found.",
+    )
     return parser.parse_args()
 
 
@@ -971,7 +1021,7 @@ def main() -> int:
     if args.force:
         new_items = fetched_items
     else:
-        new_items = [item for item in fetched_items if not state.is_seen(item.id)]
+        new_items = [item for item in fetched_items if not state.is_seen_item(item)]
     logger(f"[info] New items for this run: {len(new_items)}")
 
     selected = select_relevant(new_items, max_items=max(1, args.max_relevant))
@@ -999,6 +1049,8 @@ def main() -> int:
     else:
         if args.no_email:
             logger("[info] Email delivery skipped by --no-email.")
+        elif not new_items and not args.email_empty_digest:
+            logger("[info] Email delivery skipped: no new items since previous run.")
         elif email_config_present(settings):
             subject = build_email_subject(run_at, len(selected))
             try:
@@ -1016,7 +1068,7 @@ def main() -> int:
         else:
             logger("[info] Email delivery skipped: SMTP settings not configured.")
 
-        state.mark_seen([item.id for item in fetched_items], run_at)
+        state.mark_seen_items(fetched_items, run_at)
         state.prune_seen(args.prune_days, run_at)
         state.set_value("last_run_utc", run_at.isoformat())
 
