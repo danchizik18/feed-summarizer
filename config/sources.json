@@ -1,0 +1,42 @@
+[
+  {
+    "name": "Medium AI",
+    "url": "https://medium.com/feed/tag/artificial-intelligence",
+    "categories": ["AI"]
+  },
+  {
+    "name": "Medium Programming",
+    "url": "https://medium.com/feed/tag/programming",
+    "categories": ["SWE"]
+  },
+  {
+    "name": "Reddit MachineLearning",
+    "url": "https://www.reddit.com/r/MachineLearning/.rss",
+    "categories": ["AI"]
+  },
+  {
+    "name": "Reddit LocalLLaMA",
+    "url": "https://www.reddit.com/r/LocalLLaMA/.rss",
+    "categories": ["AI"]
+  },
+  {
+    "name": "Reddit Programming",
+    "url": "https://www.reddit.com/r/programming/.rss",
+    "categories": ["SWE"]
+  },
+  {
+    "name": "Hacker News Frontpage",
+    "url": "https://hnrss.org/frontpage",
+    "categories": ["AI", "SWE"]
+  },
+  {
+    "name": "InfoQ",
+    "url": "https://feed.infoq.com/",
+    "categories": ["SWE"]
+  },
+  {
+    "name": "MIT Technology Review AI",
+    "url": "https://www.technologyreview.com/topic/artificial-intelligence/feed",
+    "categories": ["AI"]
+  }
+]

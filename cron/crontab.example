@@ -1,0 +1,2 @@
+# Run every day at 07:00 local time
+0 7 * * * cd /Users/danchizik/Desktop/feed_summary && /Users/danchizik/Desktop/feed_summary/cron/run_daily.sh
