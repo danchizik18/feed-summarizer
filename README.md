@@ -50,6 +50,12 @@ source .venv/bin/activate
 python daily_digest.py --max-items-per-source 40
 ```
 
+To persist logs during manual runs:
+
+```bash
+python daily_digest.py --force 2>&1 | tee -a logs/daily_digest.log
+```
+
 Useful flags:
 
 - `--force`: ignore seen-item state and summarize currently fetched items.

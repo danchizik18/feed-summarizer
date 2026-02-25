@@ -11,7 +11,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 try:
@@ -278,14 +278,21 @@ class RssClient:
         self,
         sources: list[SourceDefinition],
         max_items_per_source: int,
+        logger: Callable[[str], None] | None = None,
     ) -> tuple[list[NewsItem], list[str]]:
         results: list[NewsItem] = []
         errors: list[str] = []
         for source in sources:
+            if logger is not None:
+                logger(f"[info] Fetching source: {source.name}")
             try:
                 source_items = self.fetch_source(source, max_items_per_source)
+                if logger is not None:
+                    logger(f"[info] {source.name}: fetched {len(source_items)} items")
                 results.extend(source_items)
             except Exception as exc:
+                if logger is not None:
+                    logger(f"[warn] {source.name}: {exc}")
                 errors.append(f"{source.name}: {exc}")
         deduped: dict[str, NewsItem] = {}
         for item in results:
@@ -790,11 +797,21 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Generate report without updating seen-item state.",
     )
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Suppress progress logs (only final result/errors).",
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
+
+    def logger(message: str) -> None:
+        if not args.quiet:
+            print(message, flush=True)
+
     if args.env_file.exists():
         load_dotenv(args.env_file)
     else:
@@ -809,6 +826,7 @@ def main() -> int:
     if not sources:
         print("[error] No sources configured. Add entries to config/sources.json.")
         return 1
+    logger(f"[info] Loaded {len(sources)} sources from {args.sources_file}")
 
     state = StateStore(args.state_file)
     try:
@@ -818,10 +836,13 @@ def main() -> int:
         return 1
 
     try:
+        logger("[info] Starting feed fetch")
         fetched_items, source_errors = client.fetch_all(
             sources=sources,
             max_items_per_source=max(1, args.max_items_per_source),
+            logger=logger if not args.quiet else None,
         )
+        logger(f"[info] Fetch complete. Total fetched items: {len(fetched_items)}")
     except Exception as exc:
         print(f"[error] Failed fetching sources: {exc}")
         return 1
@@ -834,8 +855,10 @@ def main() -> int:
         new_items = fetched_items
     else:
         new_items = [item for item in fetched_items if not state.is_seen(item.id)]
+    logger(f"[info] New items for this run: {len(new_items)}")
 
     selected = select_relevant(new_items, max_items=max(1, args.max_relevant))
+    logger(f"[info] Relevant items selected: {len(selected)}")
     summarizer = DigestSummarizer(api_key=settings.openai_api_key, model=settings.openai_model)
     digest = summarizer.summarize(selected)
     if not new_items:
@@ -852,6 +875,7 @@ def main() -> int:
         source_errors=source_errors,
     )
     report_path = write_report(args.report_dir, report_text, run_at)
+    logger(f"[info] Report generated at {report_path}")
 
     if not args.dry_run:
         state.mark_seen([item.id for item in fetched_items], run_at)
